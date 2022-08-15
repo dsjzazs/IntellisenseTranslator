@@ -9,66 +9,69 @@ class Program
 
         var translateData = Program.LoadTranslateData();
         Console.WriteLine($"已载入字典文件共：{translateData.Count}项");
-        Console.WriteLine("是否更新字典文件?(y/n)");
-        var input = Console.ReadLine();
-        if (input.ToUpper() == "Y")
-        {
-            Console.WriteLine("请输入需要翻译的文件夹路径（会自动扫描子目录内的文件）");
-            input = Console.ReadLine();
-            if (System.IO.Directory.Exists(input) == false)
-            {
-                Console.WriteLine($"输入路径{input}无效");
-                return;
-            }
-            var source = LoadXmlData(input);
-            Console.WriteLine($"载入等待翻译的语句共计：{source.Count()}项");
-            var step = 1000;
-            for (int i = 0; i < source.Count() + step; i += step)
-            {
-                var source_part = source.Skip(i).Take(step);
-                if (source_part.Any())
-                {
-                    var temp_dic = new Dictionary<string, string>();
-                    System.Threading.Tasks.Parallel.ForEach(source_part, new ParallelOptions() { MaxDegreeOfParallelism = 5 }, text =>
-                    {
-                        if (translateData.ContainsKey(text))
-                            return;
-                        try
-                        {
-                            Console.WriteLine("\t" + text);
-                            var result = translator.TranslateAsync(text, "zh-cn").Result;
-                            if (result != null && string.IsNullOrWhiteSpace(result.Translation) == false)
-                            {
-                                Console.WriteLine($"{temp_dic.Count}/{source_part.Count()},{i}/{source.Count()}\t" + result.Translation);
-                                translateData[text] = result.Translation;
-                                temp_dic[text] = result.Translation;
-                            }
-                        }
-                        catch (Exception ex)
-                        {
-                            Console.WriteLine(ex.Message);
-                        }
-                    });
-
-                    System.IO.File.WriteAllText($@"..\..\..\Data\{System.Environment.GetEnvironmentVariable("UserName").ToString()}_{DateTime.Now.ToString("yyyyMMddHHmmssfff")}.json", Newtonsoft.Json.JsonConvert.SerializeObject(temp_dic));
-                    Console.WriteLine("写入json文件完成");
-                }
-            }
-            Console.WriteLine("更新字典完成");
-        }
-        Console.WriteLine("准备使用字典翻译xml文件");
         Console.WriteLine("请输入需要翻译的文件夹路径（会自动扫描子目录内的文件）");
-
-        input = Console.ReadLine();
-        if (System.IO.Directory.Exists(input) == false)
+        var path = Console.ReadLine();
+        if (System.IO.Directory.Exists(path) == false)
         {
-            Console.WriteLine($"输入路径{input}无效");
+            Console.WriteLine($"输入路径{path}无效");
             return;
         }
 
 
+        Console.WriteLine("是否更新字典文件?(y/n)");
+        if (Console.ReadLine().ToUpper() == "Y")
+        {
+            var source = LoadXmlData(path).Where(k => translateData.ContainsKey(k) == false);
+            Console.WriteLine($"载入等待翻译的语句共计：{source.Count()}项");
+            var step = 1000;
+            Dictionary<string, string> temp_dic = null;
+            for (int i = 0; i < source.Count() + step; i += step)
+            {
+                var source_part = source.Skip(i).Take(step);
+                if (source_part.Any() == false)
+                    continue;
 
-        TranslateXml(translateData, input);
+                if (temp_dic == null)
+                    temp_dic = new Dictionary<string, string>();
+
+                System.Threading.Tasks.Parallel.ForEach(source_part, new ParallelOptions() { MaxDegreeOfParallelism = 5 }, text =>
+                {
+                    if (translateData.ContainsKey(text))
+                        return;
+                    try
+                    {
+                        Console.WriteLine("\t" + text);
+                        var result = translator.TranslateAsync(text, "zh-cn").Result;
+                        if (result != null && string.IsNullOrWhiteSpace(result.Translation) == false)
+                        {
+                            Console.WriteLine($"{temp_dic.Count}/{source_part.Count()},{i}/{source.Count()}\t" + result.Translation);
+                            translateData[text] = result.Translation;
+                            temp_dic[text] = result.Translation;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine(ex.Message);
+                    }
+                });
+                if (temp_dic.Count >= step)
+                {
+                    System.IO.File.WriteAllText($@"..\..\..\Data\{System.Environment.GetEnvironmentVariable("UserName").ToString()}_{DateTime.Now.ToString("yyyyMMddHHmmssfff")}.json", Newtonsoft.Json.JsonConvert.SerializeObject(temp_dic));
+                    Console.WriteLine("写入json文件完成");
+                    temp_dic = null;
+                }
+            }
+            if (temp_dic != null)
+            {
+                System.IO.File.WriteAllText($@"..\..\..\Data\{System.Environment.GetEnvironmentVariable("UserName").ToString()}_{DateTime.Now.ToString("yyyyMMddHHmmssfff")}.json", Newtonsoft.Json.JsonConvert.SerializeObject(temp_dic));
+                Console.WriteLine("写入json文件完成");
+                temp_dic = null;
+            }
+            Console.WriteLine("更新字典完成");
+        }
+        Console.WriteLine("准备使用字典翻译xml文件");
+
+        TranslateXml(translateData, path);
 
         Console.WriteLine("翻译完成，请检查translate文件夹，如需使用请手动复制替换原有文件。");
     }
