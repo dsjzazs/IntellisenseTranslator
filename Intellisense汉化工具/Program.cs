@@ -21,13 +21,13 @@ class Program
         Console.WriteLine("是否更新字典文件?(y/n)");
         if (Console.ReadLine().ToUpper() == "Y")
         {
-            var source = LoadXmlData(path).Where(k => translateData.ContainsKey(k) == false);
+            var source = new Queue<string>(LoadXmlData(path).Where(k => translateData.ContainsKey(k) == false)).ToArray();
             Console.WriteLine($"载入等待翻译的语句共计：{source.Count()}项");
             var step = 1000;
             Dictionary<string, string> temp_dic = null;
             for (int i = 0; i < source.Count() + step; i += step)
             {
-                var source_part = source.Skip(i).Take(step);
+                var source_part = source.Skip(i).Take(step).ToArray();
                 if (source_part.Any() == false)
                     continue;
 
@@ -69,11 +69,12 @@ class Program
             }
             Console.WriteLine("更新字典完成");
         }
-        Console.WriteLine("准备使用字典翻译xml文件");
-
-        TranslateXml(translateData, path);
-
-        Console.WriteLine("翻译完成，请检查translate文件夹，如需使用请手动复制替换原有文件。");
+        Console.WriteLine("使用字典翻译xml文件?(Y/N)");
+        if (Console.ReadLine().ToUpper() == "Y")
+        {
+            TranslateXml(translateData, path);
+            Console.WriteLine("翻译完成，请检查translate文件夹，如需使用请手动复制替换原有文件。");
+        }
     }
 
     /// <summary>
