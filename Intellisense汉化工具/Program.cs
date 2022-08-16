@@ -1,8 +1,10 @@
 ﻿using GTranslate.Translators;
 using Intellisense汉化工具;
+using static System.Net.Mime.MediaTypeNames;
 
 class Program
 {
+
     static void Main(string[] args)
     {
         var translator = new AggregateTranslator();
@@ -21,52 +23,51 @@ class Program
         Console.WriteLine("是否更新字典文件?(y/n)");
         if (Console.ReadLine().ToUpper() == "Y")
         {
-            var source = new Queue<string>(LoadXmlData(path).Where(k => translateData.ContainsKey(k) == false)).ToArray();
+            var source = new System.Collections.Concurrent.ConcurrentQueue<string>(LoadXmlData(path).Where(k => translateData.ContainsKey(k) == false));
             Console.WriteLine($"载入等待翻译的语句共计：{source.Count()}项");
-            var step = 1000;
-            Dictionary<string, string> temp_dic = null;
-            for (int i = 0; i < source.Count() + step; i += step)
+            var thread_num = 30;
+            var temp_dic = new System.Collections.Concurrent.ConcurrentDictionary<string, string>();
+            var task_list = new List<Task>();
+            for (int i = 0; i < thread_num; i++)
             {
-                var source_part = source.Skip(i).Take(step).ToArray();
-                if (source_part.Any() == false)
-                    continue;
-
-                if (temp_dic == null)
-                    temp_dic = new Dictionary<string, string>();
-
-                System.Threading.Tasks.Parallel.ForEach(source_part, new ParallelOptions() { MaxDegreeOfParallelism = 5 }, text =>
+                var task = new Task(() =>
                 {
-                    if (translateData.ContainsKey(text))
-                        return;
-                    try
+                    while (source.Count > 0)
                     {
-                        Console.WriteLine("\t" + text);
-                        var result = translator.TranslateAsync(text, "zh-cn").Result;
-                        if (result != null && string.IsNullOrWhiteSpace(result.Translation) == false)
+                        if (source.TryDequeue(out string text))
                         {
-                            Console.WriteLine($"{temp_dic.Count}/{source_part.Count()},{i}/{source.Count()}\t" + result.Translation);
-                            translateData[text] = result.Translation;
-                            temp_dic[text] = result.Translation;
+                            if (translateData.ContainsKey(text))
+                                return;
+                            try
+                            {
+                                Console.WriteLine("\t" + text);
+                                var result = translator.TranslateAsync(text, "zh-cn").Result;
+                                if (result != null && string.IsNullOrWhiteSpace(result.Translation) == false)
+                                {
+                                    Console.WriteLine($"{temp_dic.Count}/{source.Count}\t{text}\t{result.Translation}");
+                                    translateData[text] = result.Translation;
+                                    temp_dic[text] = result.Translation;
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                Console.WriteLine(ex.Message);
+                            }
                         }
                     }
-                    catch (Exception ex)
-                    {
-                        Console.WriteLine(ex.Message);
-                    }
-                });
-                if (temp_dic.Count >= step)
-                {
-                    System.IO.File.WriteAllText($@"..\..\..\Data\{System.Environment.GetEnvironmentVariable("UserName").ToString()}_{DateTime.Now.ToString("yyyyMMddHHmmssfff")}.json", Newtonsoft.Json.JsonConvert.SerializeObject(temp_dic));
-                    Console.WriteLine("写入json文件完成");
-                    temp_dic = null;
-                }
+                }, TaskCreationOptions.LongRunning);
+                task.Start();
+                task_list.Add(task);
             }
-            if (temp_dic != null)
+
+            Task.WaitAll(task_list.ToArray());
+
+            if (temp_dic.Count >= 0)
             {
-                System.IO.File.WriteAllText($@"..\..\..\Data\{System.Environment.GetEnvironmentVariable("UserName").ToString()}_{DateTime.Now.ToString("yyyyMMddHHmmssfff")}.json", Newtonsoft.Json.JsonConvert.SerializeObject(temp_dic));
-                Console.WriteLine("写入json文件完成");
-                temp_dic = null;
+                SaveDataFile(temp_dic);
+                temp_dic.Clear();
             }
+
             Console.WriteLine("更新字典完成");
         }
         Console.WriteLine("使用字典翻译xml文件?(Y/N)");
@@ -75,6 +76,11 @@ class Program
             TranslateXml(translateData, path);
             Console.WriteLine("翻译完成，请检查translate文件夹，如需使用请手动复制替换原有文件。");
         }
+    }
+    public static void SaveDataFile(IEnumerable<KeyValuePair<string, string>> temp_dic)
+    {
+        System.IO.File.WriteAllText($@"..\..\..\Data\{System.Environment.GetEnvironmentVariable("UserName").ToString()}_{DateTime.Now.ToString("yyyyMMddHHmmssfff")}.json", Newtonsoft.Json.JsonConvert.SerializeObject(temp_dic));
+        Console.WriteLine("写入json文件完成");
     }
 
     /// <summary>
@@ -87,24 +93,33 @@ class Program
         var factory = new System.Xml.Serialization.XmlSerializerFactory();
         var serial = factory.CreateSerializer(typeof(doc));
 
-        foreach (var filename in System.IO.Directory.GetFiles(path, @"*.XML"))
+        foreach (var filename in System.IO.Directory.GetFiles(path, @"*.XML", SearchOption.AllDirectories))
         {
-            var fileInfo = new System.IO.FileInfo(filename);
-            var doc = XmlReader.Read(filename);
-            foreach (var item2 in XmlReader.ReadTextEnumerable(doc.members))
+            try
             {
-                for (int i = 0; i < item2.Length; i++)
+                var fileInfo = new System.IO.FileInfo(filename);
+                var doc = XmlReader.Read(filename);
+                foreach (var item2 in XmlReader.ReadTextEnumerable(doc.members))
                 {
-                    if (dic.ContainsKey(item2[i]))
-                        item2[i] = dic[item2[i]] + "\r\n" + item2[i];
+                    for (int i = 0; i < item2.Length; i++)
+                    {
+                        if (dic.ContainsKey(item2[i]))
+                            item2[i] = dic[item2[i]] + "\r\n" + item2[i];
+                    }
                 }
+                Console.WriteLine("output " + fileInfo.Name);
+                var outPath = filename.Substring(path.Length, filename.Length - path.Length - fileInfo.Name.Length - 1);
+                System.IO.Directory.CreateDirectory(@$".\translate\{outPath}");
+                var outFilename = @$".\translate\{outPath}\{fileInfo.Name}";
+                var writeStream = System.IO.File.Create(outFilename);
+                serial.Serialize(writeStream, doc);
+                writeStream.Dispose();
             }
-            Console.WriteLine("output " + fileInfo.Name);
-            var outPath = filename.Substring(path.Length, filename.Length - path.Length - fileInfo.Name.Length - 1);
-            System.IO.Directory.CreateDirectory(@$".\translate\{outPath}");
-            var writeStream = System.IO.File.Create(@$".\translate\{outPath}\{filename.Substring(path.Length)}");
-            serial.Serialize(writeStream, doc);
-            writeStream.Dispose();
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex.Message);
+            }
+
         }
     }
 
@@ -117,18 +132,25 @@ class Program
         var hash = new HashSet<string>();
 
         Dictionary<string, string> dic = new Dictionary<string, string>();
-        foreach (var fileName in System.IO.Directory.GetFiles(path, @"*.xml"))
+        foreach (var fileName in System.IO.Directory.GetFiles(path, @"*.xml", SearchOption.AllDirectories))
         {
             Console.WriteLine($"load {fileName}");
             var fileInfo = new System.IO.FileInfo(fileName);
-            var doc = XmlReader.Read(fileName);
+            try
+            {
+                var doc = XmlReader.Read(fileName);
 
-            foreach (var text in XmlReader.ReadTextEnumerable(doc.members))
-                foreach (var simText in text)
-                {
-                    if (HasChinese(simText) == false)
-                        hash.Add(simText);
-                }
+                foreach (var text in XmlReader.ReadTextEnumerable(doc.members))
+                    foreach (var simText in text)
+                    {
+                        if (HasChinese(simText) == false)
+                            hash.Add(simText);
+                    }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex.Message);
+            }
         }
         return hash;
     }
