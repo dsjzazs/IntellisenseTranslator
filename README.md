@@ -1,5 +1,11 @@
 # IntellisenseTranslator
 
+## 翻译效果
+![image](https://user-images.githubusercontent.com/13758552/185071382-cc7d314f-ccfc-40ab-93ed-b78b77c9e093.png)
+![image](https://user-images.githubusercontent.com/13758552/185071408-8fedf271-ee1e-4a75-8378-45f27794eb87.png)
+![image](https://user-images.githubusercontent.com/13758552/185071468-f4b38b3a-4090-4f66-87f2-d33b2e6f7897.png)
+![image](https://user-images.githubusercontent.com/13758552/185071552-22772b11-d2ff-4a5e-a620-9b73f6bfe498.png)
+### 同时显示翻译的中文和原文
 
 
 ## 如何更新字典并翻译？
