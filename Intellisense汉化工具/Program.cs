@@ -1,14 +1,14 @@
 ﻿using GTranslate.Translators;
-using Intellisense汉化工具;
+using System.Text;
+using System.Xml;
 using static System.Net.Mime.MediaTypeNames;
 
 class Program
 {
 
+
     static void Main(string[] args)
     {
-        var translator = new AggregateTranslator();
-
         var translateData = Program.LoadTranslateData();
         Console.WriteLine($"已载入字典文件共：{translateData.Count}项");
         Console.WriteLine("请输入需要翻译的文件夹路径（会自动扫描子目录内的文件）");
@@ -25,34 +25,53 @@ class Program
         {
             var source = new System.Collections.Concurrent.ConcurrentQueue<string>(LoadXmlData(path).Where(k => translateData.ContainsKey(k) == false));
             Console.WriteLine($"载入等待翻译的语句共计：{source.Count()}项");
-            var thread_num = 30;
+            var thread_num = 5;
             var temp_dic = new System.Collections.Concurrent.ConcurrentDictionary<string, string>();
             var task_list = new List<Task>();
             for (int i = 0; i < thread_num; i++)
             {
                 var task = new Task(() =>
                 {
+                    var translator = new AggregateTranslator();
                     while (source.Count > 0)
                     {
-                        if (source.TryDequeue(out string text))
+                        try
                         {
-                            if (translateData.ContainsKey(text))
-                                return;
-                            try
+                            var sb = new StringBuilder();
+                            var array = DequeueArray(source, 4000);
+                            foreach (var item in array)
                             {
-                                Console.WriteLine("\t" + text);
-                                var result = translator.TranslateAsync(text, "zh-cn").Result;
-                                if (result != null && string.IsNullOrWhiteSpace(result.Translation) == false)
+                                sb.AppendLine(item);
+                                sb.AppendLine("@@@@");
+                            }
+
+                            var result = translator.TranslateAsync(sb.ToString(), "zh-cn").Result;
+                            if (result == null || string.IsNullOrWhiteSpace(result.Translation))
+                                continue;
+
+                            var result_dic = AnalyzeText(array, result.Translation);
+                            foreach (var item in result_dic)
+                            {
+                                Console.WriteLine($"{temp_dic.Count}/{source.Count}\t{item.Key}\t{item.Value}");
+                                translateData[item.Key] = item.Value;
+                                temp_dic[item.Key] = item.Value;
+                                if (temp_dic.Count > 10000)
                                 {
-                                    Console.WriteLine($"{temp_dic.Count}/{source.Count}\t{text}\t{result.Translation}");
-                                    translateData[text] = result.Translation;
-                                    temp_dic[text] = result.Translation;
+                                    lock (temp_dic)
+                                    {
+                                        if (temp_dic.Count > 10000)
+                                        {
+                                            var dic2 = temp_dic;
+                                            temp_dic = new System.Collections.Concurrent.ConcurrentDictionary<string, string>();
+                                            SaveDataFile(dic2);
+                                        }
+                                    }
                                 }
                             }
-                            catch (Exception ex)
-                            {
-                                Console.WriteLine(ex.Message);
-                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine(ex.Message);
                         }
                     }
                 }, TaskCreationOptions.LongRunning);
@@ -76,7 +95,93 @@ class Program
             TranslateXml(translateData, path);
             Console.WriteLine("翻译完成，请检查translate文件夹，如需使用请手动复制替换原有文件。");
         }
+        Console.ReadLine();
     }
+    /// <summary>
+    /// 读取xml
+    /// </summary>
+    /// <param name="node"></param>
+    /// <returns></returns>
+    public static IEnumerable<XmlNode> ReadXmlNodes(XmlNode node)
+    {
+        foreach (XmlNode item in node.ChildNodes)
+        {
+            if (item.ChildNodes.Count > 0)
+                foreach (XmlNode sub_item in ReadXmlNodes(item))
+                {
+                    if (sub_item.Value != null && sub_item.NodeType == XmlNodeType.Text && (item.ParentNode == null || item.ParentNode.Name != "name"))
+                        yield return sub_item;
+                }
+            else if (item.Value != null && item.NodeType == XmlNodeType.Text && (item.ParentNode == null || item.ParentNode.Name != "name"))
+                yield return item;
+        }
+    }
+
+    /// <summary>
+    /// 解析翻译后的内容
+    /// </summary>
+    /// <param name="source"></param>
+    /// <param name="text"></param>
+    /// <returns></returns>
+    /// <exception cref="ArgumentOutOfRangeException"></exception>
+    public static Dictionary<string, string> AnalyzeText(string[] source, string text)
+    {
+        if (System.Text.RegularExpressions.Regex.Matches(text, "@@@@").Count != source.Length)
+            throw new ArgumentOutOfRangeException();
+
+        var reader = new System.IO.StringReader(text);
+        var dic = new Dictionary<string, string>();
+        var sb = new StringBuilder();
+        var index = 0;
+        while (true)
+        {
+            var line = reader.ReadLine();
+            if (line == null)
+                return dic;
+            else if (line == "@@@@")
+            {
+                dic[source[index++]] = sb.ToString();
+                sb.Clear();
+            }
+            else
+                sb.AppendLine(line);
+        }
+    }
+    /// <summary>
+    /// 从列队中取出字符串
+    /// </summary>
+    /// <param name="queue"></param>
+    /// <param name="limit_char_number"></param>
+    /// <returns></returns>
+    public static string[] DequeueArray(System.Collections.Concurrent.ConcurrentQueue<string> queue, int limit_char_number)
+    {
+        int total_char_number = 0;
+        int total_line_number = 0;
+        List<string> list = new List<string>();
+        while (queue.Count > 0)
+        {
+            if (queue.TryDequeue(out string result))
+            {
+
+                if (result.Length > 2000)
+                    continue;
+
+                if (total_char_number + (total_line_number * (2 + 4)) > limit_char_number)
+                {
+                    queue.Enqueue(result);
+                    break;
+                }
+                else
+                {
+                    total_char_number += result.Length;
+                    total_line_number++;
+                    list.Add(result);
+                }
+            }
+        }
+        return list.ToArray();
+    }
+
     public static void SaveDataFile(IEnumerable<KeyValuePair<string, string>> temp_dic)
     {
         System.IO.File.WriteAllText($@"..\..\..\Data\{System.Environment.GetEnvironmentVariable("UserName").ToString()}_{DateTime.Now.ToString("yyyyMMddHHmmssfff")}.json", Newtonsoft.Json.JsonConvert.SerializeObject(temp_dic));
@@ -90,30 +195,34 @@ class Program
     /// <param name="path"></param>
     public static void TranslateXml(Dictionary<string, string> dic, string path)
     {
-        var factory = new System.Xml.Serialization.XmlSerializerFactory();
-        var serial = factory.CreateSerializer(typeof(doc));
+        XmlReaderSettings settings = new XmlReaderSettings();
+        settings.DtdProcessing = DtdProcessing.Parse;
 
         foreach (var filename in System.IO.Directory.GetFiles(path, @"*.XML", SearchOption.AllDirectories))
         {
             try
             {
+                XmlDocument doc = new XmlDocument();
+                doc.Load(filename);
+                if (IsIntellisenseXml(doc) == false)
+                    continue;
+
                 var fileInfo = new System.IO.FileInfo(filename);
-                var doc = XmlReader.Read(filename);
-                foreach (var item2 in XmlReader.ReadTextEnumerable(doc.members))
-                {
-                    for (int i = 0; i < item2.Length; i++)
-                    {
-                        if (dic.ContainsKey(item2[i]))
-                            item2[i] = dic[item2[i]] + "\r\n" + item2[i];
-                    }
-                }
                 Console.WriteLine("output " + fileInfo.Name);
                 var outPath = filename.Substring(path.Length, filename.Length - path.Length - fileInfo.Name.Length - 1);
                 System.IO.Directory.CreateDirectory(@$".\translate\{outPath}");
                 var outFilename = @$".\translate\{outPath}\{fileInfo.Name}";
-                var writeStream = System.IO.File.Create(outFilename);
-                serial.Serialize(writeStream, doc);
-                writeStream.Dispose();
+
+       
+                foreach (var item in ReadXmlNodes(doc))
+                {
+                    if (item.Value == null)
+                        continue;
+                    var text = item.Value;
+                    if (dic.ContainsKey(text))
+                        item.Value = dic[text] + "\r\n" + text;
+                }
+                doc.Save(outFilename);
             }
             catch (Exception ex)
             {
@@ -132,20 +241,26 @@ class Program
         var hash = new HashSet<string>();
 
         Dictionary<string, string> dic = new Dictionary<string, string>();
+
+        XmlReaderSettings settings = new XmlReaderSettings();
+        settings.DtdProcessing = DtdProcessing.Parse;
+
         foreach (var fileName in System.IO.Directory.GetFiles(path, @"*.xml", SearchOption.AllDirectories))
         {
             Console.WriteLine($"load {fileName}");
-            var fileInfo = new System.IO.FileInfo(fileName);
             try
             {
-                var doc = XmlReader.Read(fileName);
-
-                foreach (var text in XmlReader.ReadTextEnumerable(doc.members))
-                    foreach (var simText in text)
-                    {
-                        if (HasChinese(simText) == false)
-                            hash.Add(simText);
-                    }
+                XmlDocument doc = new XmlDocument();
+                doc.Load(fileName);
+                if (IsIntellisenseXml(doc) == false)
+                    continue;
+                foreach (var item in ReadXmlNodes(doc))
+                {
+                    if (item.Value == null)
+                        continue;
+                    if (HasChinese(item.Value) == false)
+                        hash.Add(item.Value);
+                }
             }
             catch (Exception ex)
             {
@@ -155,6 +270,33 @@ class Program
         return hash;
     }
 
+    public static XmlNode FindXmlNote(XmlNodeList nodes, string name)
+    {
+        foreach (XmlNode item in nodes)
+        {
+            if (item.Name == name)
+                return item;
+        }
+        return null;
+    }
+    public static bool IsIntellisenseXml(XmlDocument doc)
+    {
+        var doc_node = FindXmlNote(doc.ChildNodes, "doc");
+        if (doc_node == null)
+            return false;
+
+        var assembly_node = FindXmlNote(doc_node.ChildNodes, "assembly");
+        if (doc_node == null)
+            return false;
+
+        if (FindXmlNote(assembly_node.ChildNodes, "name") == null)
+            return false;
+
+        if (FindXmlNote(doc_node.ChildNodes, "members") == null)
+            return false;
+
+        return true;
+    }
     /// <summary>
     /// 载入已经翻译过的数据字典
     /// </summary>
