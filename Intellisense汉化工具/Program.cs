@@ -211,9 +211,11 @@ class Program
                 Console.WriteLine("output " + fileInfo.Name);
                 var outPath = filename.Substring(path.Length, filename.Length - path.Length - fileInfo.Name.Length - 1);
                 System.IO.Directory.CreateDirectory(@$".\translate\{outPath}");
+                System.IO.Directory.CreateDirectory(@$".\backup\{outPath}");
                 var outFilename = @$".\translate\{outPath}\{fileInfo.Name}";
+                var backupFilename = @$".\backup\{outPath}\{fileInfo.Name}";
+                doc.Save(backupFilename);
 
-       
                 foreach (var item in ReadXmlNodes(doc))
                 {
                     if (item.Value == null)
