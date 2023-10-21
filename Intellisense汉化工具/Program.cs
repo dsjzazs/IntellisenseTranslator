@@ -288,7 +288,7 @@ class Program
             return false;
 
         var assembly_node = FindXmlNote(doc_node.ChildNodes, "assembly");
-        if (doc_node == null)
+        if (assembly_node == null)
             return false;
 
         if (FindXmlNote(assembly_node.ChildNodes, "name") == null)
